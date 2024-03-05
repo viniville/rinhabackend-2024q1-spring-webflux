@@ -18,19 +18,8 @@ import java.util.List;
 @Transactional(readOnly = true)
 public class TransacaoRepository {
 
-    private static final String SQL_UPDATE_SALDO_CLIENTE = """
-                WITH results AS (
-                    UPDATE cliente
-                    SET saldo = saldo + ($1)
-                    WHERE id = $2
-                    RETURNING limite, saldo
-                )
-                SELECT * FROM results
-            """;
-
-    private static final String SQL_INSERT_TRANSACAO = """
-            INSERT INTO transacao (id_cliente, descricao, tipo, valor)
-            VALUES($1, $2, $3, $4);
+    private static final String SQL_UPDATE_SALDO_AND_INSERT_TRANSACAO = """
+                select * from registrar_transacao(:idCliente, :tipo, :descricao, :valor)
             """;
 
     private static final String SQL_EXTRATO = """
@@ -48,7 +37,7 @@ public class TransacaoRepository {
                 where
                 	c.id = :idCliente
                 order by 
-                    t.realizada_em desc
+                    t.id desc
                 limit 10
             """;
 
@@ -61,24 +50,24 @@ public class TransacaoRepository {
     @Transactional
     public Mono<TransacaoInsertResponse> registrarTransacao(TransacaoInsertRequest transacao) {
         return databaseClient
-                .sql(SQL_UPDATE_SALDO_CLIENTE)
-                .bind("$1", valorTransacaoParaSomaSaldo(transacao))
-                .bind("$2", transacao.idCliente())
-                .map(row -> new TransacaoInsertResponse(row.get("limite", Long.class), row.get("saldo", Long.class)))
+                .sql(SQL_UPDATE_SALDO_AND_INSERT_TRANSACAO)
+                .bind("idCliente", transacao.idCliente())
+                .bind("tipo", transacao.tipo())
+                .bind("descricao", transacao.descricao())
+                .bind("valor", transacao.valor())
+                .map(row -> new RegistroTransacaoResponseQuery(
+                        row.get("out_limite_cliente", Long.class),
+                        row.get("out_novo_saldo_cliente", Long.class),
+                        row.get("out_status", String.class)))
                 .first()
                 .flatMap(resposta -> {
-                    if (transacao.tipo().equals("d") && resposta.saldo() < 0 && ((-resposta.saldo()) > resposta.limite())) {
-                        return Mono.error(new SaldoInsuficienteException("saldo insuficiente"));
-                    } else {
-                        return databaseClient
-                                .sql(SQL_INSERT_TRANSACAO)
-                                .bind("$1", transacao.idCliente())
-                                .bind("$2", transacao.descricao())
-                                .bind("$3", transacao.tipo())
-                                .bind("$4", transacao.valor())
-                                .fetch().rowsUpdated()
-                                .thenReturn(resposta);
+                    if ("CI".equalsIgnoreCase(resposta.status())) {
+                        return Mono.error(new ClienteNaoExisteException("Cliente não encontrado"));
                     }
+                    if ("SI".equalsIgnoreCase(resposta.status())) {
+                        return Mono.error(new SaldoInsuficienteException("Saldo insuficiente"));
+                    }
+                    return Mono.just(new TransacaoInsertResponse(resposta.limite(), resposta.saldo()));
                 });
     }
 
@@ -104,17 +93,10 @@ public class TransacaoRepository {
                 .flatMap(saldoETransacoes -> {
                     if (saldoETransacoes.isEmpty()) {
                         return Mono.error(new ClienteNaoExisteException("Cliente não encontrado"));
-                        //throw new ClienteNaoExisteException("Cliente não encontrado");
                     }
                     return Mono.just(ExtratoResponseQuery.toExtratoResponse(saldoETransacoes));
                 });
     }
-
-    private Long valorTransacaoParaSomaSaldo(TransacaoInsertRequest transacaoInsertRequest) {
-        return "c".equals(transacaoInsertRequest.tipo()) ?
-                transacaoInsertRequest.valor() : -transacaoInsertRequest.valor();
-    }
-
 
     private record ExtratoResponseQuery(
             Long total,
@@ -147,6 +129,11 @@ public class TransacaoRepository {
         public ExtratoResponseTransacao toTransacaoResponse() {
             return new ExtratoResponseTransacao(valor, tipo, descricao, realizadaEm);
         }
-
     }
+
+    private record RegistroTransacaoResponseQuery(
+            Long limite,
+            Long saldo,
+            String status
+    ) { }
 }

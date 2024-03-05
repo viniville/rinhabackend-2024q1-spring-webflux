@@ -2,7 +2,7 @@ version: "3.5"
 
 services:
   api01: &api
-    image: viniville/rinhabackend-2024-q1:latest
+    image: viniville/rinhabackend-sb-webflux-2024-q1:latest
     hostname: api01
     environment:
       - DB_HOSTNAME=db
@@ -17,7 +17,7 @@ services:
       resources:
         limits:
           cpus: "0.4"
-          memory: "200MB"
+          memory: "210MB"
 
   api02:
     # Essa sintaxe reusa o que foi declarado em 'api01'.
@@ -51,11 +51,13 @@ services:
       - "5432:5432"
     volumes:
       - ./script.sql:/docker-entrypoint-initdb.d/script.sql
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf
+    command: "postgres -c config_file=/etc/postgresql/postgresql.conf"
     deploy:
       resources:
         limits:
           cpus: "0.5"
-          memory: "140MB"
+          memory: "120MB"
 networks:
   default:
     driver: bridge
